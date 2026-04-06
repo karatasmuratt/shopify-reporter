@@ -1,0 +1,6 @@
+venv/
+reports/
+config.json
+__pycache__/
+*.pyc
+logs.txt
