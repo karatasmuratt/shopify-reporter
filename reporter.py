@@ -560,7 +560,7 @@ def generate_report3_excel(all_period_data, currency):
 # ==================== MESAJ GÖNDERME ====================
 
 def send_whatsapp(config, message, files=None):
-    """Twilio ile WhatsApp mesajı gönder."""
+    """Twilio ile WhatsApp mesajı gönder. Uzun mesajları böler."""
     wa = config.get("whatsapp", {})
     sid = wa.get("twilio_sid")
     token = wa.get("twilio_token")
@@ -573,7 +573,27 @@ def send_whatsapp(config, message, files=None):
     try:
         from twilio.rest import Client
         client = Client(sid, token)
-        client.messages.create(body=message, from_=from_num, to=to_num)
+        
+        # Mesaj 1500 karakterden uzunsa böl
+        if len(message) <= 1500:
+            client.messages.create(body=message, from_=from_num, to=to_num)
+        else:
+            parts = []
+            current = ""
+            for line in message.split("\n"):
+                if len(current) + len(line) + 1 > 1400:
+                    parts.append(current)
+                    current = line
+                else:
+                    current += "\n" + line if current else line
+            if current:
+                parts.append(current)
+            
+            for i, part in enumerate(parts):
+                if len(parts) > 1:
+                    part = f"({i+1}/{len(parts)})\n{part}"
+                client.messages.create(body=part, from_=from_num, to=to_num)
+        
         logger.info("✅ WhatsApp mesajı gönderildi")
         if files:
             for f in files:
@@ -597,7 +617,7 @@ def send_email(config, subject, message, files=None):
     app_password = email_cfg.get("gmail_app_password", "")
     recipients = email_cfg.get("to_emails", [])
 
-    if not sender or not app_password or "GMAIL" in sender.upper():
+    if not sender or not app_password or sender == "SENIN_GMAIL_ADRESIN@gmail.com":
         return False
 
     msg = MIMEMultipart()
@@ -744,6 +764,237 @@ def run_periodic_report():
     return [r3_pdf, r3_xlsx]
 
 
+# ==================== RAPOR 4: BİRLEŞİK ÜRÜN LİSTESİ ====================
+
+def generate_combined_pdf(combined_products, report_date, currency):
+    """Tüm mağazalardan satılan ürünler - mağaza adıyla birlikte - PDF."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+
+    filepath = REPORTS_DIR / f"rapor4_birlesik_urunler_{report_date}.pdf"
+    doc = SimpleDocTemplate(str(filepath), pagesize=A4, topMargin=1.5*cm, bottomMargin=1.5*cm)
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('CustomTitle', parent=styles['Title'], fontSize=18, spaceAfter=20)
+    story = []
+
+    if "30gun" in report_date:
+        title_text = f"Son 30 Gün Satılan Ürünler - {report_date.replace('_30gun','')}"
+    else:
+        title_text = f"Günlük Satılan Ürünler - {report_date}"
+    story.append(Paragraph(title_text, title_style))
+    story.append(Spacer(1, 15))
+
+    table_data = [["Mağaza", "Ürün", "Adet", f"Fiyat ({currency})", f"Toplam ({currency})"]]
+    grand_items = 0
+    grand_total = 0.0
+
+    for item in sorted(combined_products, key=lambda x: (x["store"], -x["total"])):
+        short_name = Paragraph(item["product"], styles['Normal'])
+        table_data.append([
+            Paragraph(item["store"], styles['Normal']),
+            short_name,
+            str(item["qty"]),
+            f"{currency}{item['price']:,.2f}",
+            f"{currency}{item['total']:,.2f}"
+        ])
+        grand_items += item["qty"]
+        grand_total += item["total"]
+
+    table_data.append(["", "TOPLAM", str(grand_items), "", f"{currency}{grand_total:,.2f}"])
+
+    table = Table(table_data, colWidths=[3*cm, 7*cm, 1.5*cm, 2.5*cm, 2.8*cm])
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1A5276')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('ALIGN', (2, 0), (-1, -1), 'CENTER'),
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#E74C3C')),
+        ('TEXTCOLOR', (0, -1), (-1, -1), colors.white),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#EBF5FB')]),
+        ('FONTSIZE', (0, 1), (-1, -1), 8),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+    ]))
+    story.append(table)
+    doc.build(story)
+    return filepath
+
+
+def generate_combined_excel(combined_products, report_date, currency):
+    """Tüm mağazalardan satılan ürünler - mağaza adıyla birlikte - Excel."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    filepath = REPORTS_DIR / f"rapor4_birlesik_urunler_{report_date}.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Birleşik Ürün Listesi"
+
+    header_fill = PatternFill('solid', fgColor='1A5276')
+    header_font = Font(bold=True, color='FFFFFF', size=10)
+    total_fill = PatternFill('solid', fgColor='E74C3C')
+    border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
+
+    ws.merge_cells('A1:E1')
+    if "30gun" in report_date:
+        ws['A1'] = f"Son 30 Gün Satılan Ürünler - {report_date.replace('_30gun','')}"
+    else:
+        ws['A1'] = f"Günlük Satılan Ürünler - {report_date}"
+    ws['A1'].font = Font(bold=True, size=14, color='1A5276')
+
+    headers = ["Mağaza", "Ürün", "Adet", f"Birim Fiyat ({currency})", f"Toplam ({currency})"]
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=3, column=col, value=h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal='center')
+        cell.border = border
+
+    row = 4
+    for item in sorted(combined_products, key=lambda x: (x["store"], -x["total"])):
+        c = ws.cell(row=row, column=1, value=item["store"])
+        c.border = border
+        c.alignment = Alignment(wrap_text=True)
+        c = ws.cell(row=row, column=2, value=item["product"])
+        c.border = border
+        c.alignment = Alignment(wrap_text=True)
+        ws.cell(row=row, column=3, value=item["qty"]).border = border
+        ws.cell(row=row, column=3).alignment = Alignment(horizontal='center')
+        c = ws.cell(row=row, column=4, value=item["price"])
+        c.number_format = f'"{currency}"#,##0.00'
+        c.border = border
+        c = ws.cell(row=row, column=5, value=item["total"])
+        c.number_format = f'"{currency}"#,##0.00'
+        c.border = border
+        row += 1
+
+    for col in range(1, 6):
+        cell = ws.cell(row=row, column=col)
+        cell.fill = total_fill
+        cell.font = Font(bold=True, color='FFFFFF')
+        cell.border = border
+        cell.alignment = Alignment(horizontal='center')
+    ws.cell(row=row, column=2, value="TOPLAM")
+    ws.cell(row=row, column=3).value = f"=SUM(C4:C{row-1})"
+    ws.cell(row=row, column=5).value = f"=SUM(E4:E{row-1})"
+    ws.cell(row=row, column=5).number_format = f'"{currency}"#,##0.00'
+
+    ws.column_dimensions['A'].width = 22
+    ws.column_dimensions['B'].width = 40
+    ws.column_dimensions['C'].width = 10
+    ws.column_dimensions['D'].width = 16
+    ws.column_dimensions['E'].width = 16
+
+    wb.save(str(filepath))
+    return filepath
+
+
+def run_combined_report():
+    """Tüm mağazalardan günlük + son 30 günlük satılan ürünleri listele."""
+    logger.info("=== Birleşik Ürün Raporu Başlıyor ===")
+    config = load_config()
+    stores = config["stores"]
+    currency = config.get("currency_symbol", "£")
+    yesterday_start, yesterday_end = get_yesterday_range()
+    report_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    month_start, month_end = get_period_range(30)
+
+    daily_products = []
+    monthly_products = []
+
+    for store in stores:
+        name = store["name"]
+        logger.info(f"  → {name} günlük verisi çekiliyor...")
+        try:
+            token = get_access_token(store)
+            # Günlük veri
+            orders = fetch_orders(store, token, yesterday_start, yesterday_end)
+            store_products = {}
+            for order in orders:
+                for item in order.get("line_items", []):
+                    pname = item.get("title", "Bilinmeyen Ürün")
+                    qty = item.get("quantity", 0)
+                    price = float(item.get("price", 0))
+                    if pname in store_products:
+                        store_products[pname]["qty"] += qty
+                        store_products[pname]["total"] += price * qty
+                    else:
+                        store_products[pname] = {"qty": qty, "price": price, "total": price * qty}
+            for pname, pinfo in store_products.items():
+                daily_products.append({
+                    "store": name, "product": pname,
+                    "qty": pinfo["qty"], "price": pinfo["price"], "total": pinfo["total"]
+                })
+
+            # 30 günlük veri
+            logger.info(f"  → {name} aylık verisi çekiliyor...")
+            m_orders = fetch_orders(store, token, month_start, month_end)
+            m_store_products = {}
+            for order in m_orders:
+                for item in order.get("line_items", []):
+                    pname = item.get("title", "Bilinmeyen Ürün")
+                    qty = item.get("quantity", 0)
+                    price = float(item.get("price", 0))
+                    if pname in m_store_products:
+                        m_store_products[pname]["qty"] += qty
+                        m_store_products[pname]["total"] += price * qty
+                    else:
+                        m_store_products[pname] = {"qty": qty, "price": price, "total": price * qty}
+            for pname, pinfo in m_store_products.items():
+                monthly_products.append({
+                    "store": name, "product": pname,
+                    "qty": pinfo["qty"], "price": pinfo["price"], "total": pinfo["total"]
+                })
+
+            logger.info(f"    ✓ {name} tamamlandı")
+        except Exception as e:
+            logger.error(f"    ✗ {name} hatası: {e}")
+
+    # Günlük PDF + Excel
+    r4_pdf = generate_combined_pdf(daily_products, report_date, currency)
+    r4_xlsx = generate_combined_excel(daily_products, report_date, currency)
+
+    # 30 günlük PDF + Excel
+    r5_pdf = generate_combined_pdf(monthly_products, f"{report_date}_30gun", currency)
+    r5_xlsx = generate_combined_excel(monthly_products, f"{report_date}_30gun", currency)
+
+    grand_items = sum(p["qty"] for p in daily_products)
+    grand_total = sum(p["total"] for p in daily_products)
+    m_grand_items = sum(p["qty"] for p in monthly_products)
+    m_grand_total = sum(p["total"] for p in monthly_products)
+
+    msg = f"📦 *Birleşik Ürün Raporu* - {report_date}\n\n"
+    
+    store_totals = {}
+    for item in daily_products:
+        s = item["store"]
+        if s not in store_totals:
+            store_totals[s] = {"qty": 0, "total": 0.0}
+        store_totals[s]["qty"] += item["qty"]
+        store_totals[s]["total"] += item["total"]
+    
+    for sname, sdata in store_totals.items():
+        msg += f"🏪 *{sname}*: {sdata['qty']} ürün → {currency}{sdata['total']:,.2f}\n"
+    
+    msg += f"\n💰 *GÜNLÜK TOPLAM: {grand_items} ürün → {currency}{grand_total:,.2f}*\n"
+    msg += f"📅 *30 GÜN TOPLAM: {m_grand_items} ürün → {currency}{m_grand_total:,.2f}*\n"
+    msg += f"\n📄 Detaylı ürün listesi PDF raporlarında."
+
+    send_report(config, f"Birleşik Ürün Raporu - {report_date}", msg, [r4_pdf, r4_xlsx, r5_pdf, r5_xlsx])
+    logger.info(f"✅ Birleşik rapor kaydedildi: {REPORTS_DIR}")
+    return [r4_pdf, r4_xlsx, r5_pdf, r5_xlsx]
+
+
 def main():
     if len(sys.argv) > 1:
         cmd = sys.argv[1]
@@ -751,8 +1002,11 @@ def main():
             run_daily_report()
         elif cmd == "periodic":
             run_periodic_report()
+        elif cmd == "combined":
+            run_combined_report()
         elif cmd == "all":
             run_daily_report()
+            run_combined_report()
             run_periodic_report()
         elif cmd == "schedule":
             config = load_config()
@@ -764,10 +1018,11 @@ def main():
                 schedule.run_pending()
                 time.sleep(30)
         else:
-            print("Kullanım: python reporter.py [daily|periodic|all|schedule]")
+            print("Kullanım: python reporter.py [daily|combined|periodic|all|schedule]")
     else:
         print("Kullanım:")
         print("  python reporter.py daily     → Günlük rapor (Rapor 1 + 2)")
+        print("  python reporter.py combined  → Birleşik ürün listesi (Rapor 4)")
         print("  python reporter.py periodic  → Dönemsel rapor (Rapor 3)")
         print("  python reporter.py all       → Tüm raporlar")
         print("  python reporter.py schedule  → Otomatik zamanlayıcı")
