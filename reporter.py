@@ -787,6 +787,48 @@ def generate_combined_pdf(combined_products, report_date, currency):
     story.append(Paragraph(title_text, title_style))
     story.append(Spacer(1, 15))
 
+    # Özet tablosu ekle (mağaza bazlı toplamlar)
+    if combined_products:
+        summary_style = ParagraphStyle('SummaryTitle', parent=styles['Heading2'], fontSize=14, spaceAfter=10)
+        story.append(Paragraph("📊 Mağaza Özeti", summary_style))
+        store_summary = {}
+        for item in combined_products:
+            s = item["store"]
+            if s not in store_summary:
+                store_summary[s] = {"qty": 0, "total": 0.0}
+            store_summary[s]["qty"] += item["qty"]
+            store_summary[s]["total"] += item["total"]
+        
+        sum_data = [["Mağaza", "Toplam Adet", f"Toplam Satış ({currency})"]]
+        sg_items = 0
+        sg_total = 0.0
+        for sname, sdata in store_summary.items():
+            sum_data.append([sname, str(sdata["qty"]), f"{currency}{sdata['total']:,.2f}"])
+            sg_items += sdata["qty"]
+            sg_total += sdata["total"]
+        sum_data.append(["GENEL TOPLAM", str(sg_items), f"{currency}{sg_total:,.2f}"])
+        
+        sum_table = Table(sum_data, colWidths=[6*cm, 4*cm, 6*cm])
+        sum_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2C3E50')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 11),
+            ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+            ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#27AE60')),
+            ('TEXTCOLOR', (0, -1), (-1, -1), colors.white),
+            ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#F2F3F4')]),
+            ('FONTSIZE', (0, 1), (-1, -1), 10),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        story.append(sum_table)
+        story.append(Spacer(1, 25))
+        story.append(Paragraph("📦 Ürün Detayları", summary_style))
+        story.append(Spacer(1, 10))
+
     table_data = [["Mağaza", "Ürün", "Adet", f"Fiyat ({currency})", f"Toplam ({currency})"]]
     grand_items = 0
     grand_total = 0.0
