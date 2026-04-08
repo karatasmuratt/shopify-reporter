@@ -962,7 +962,9 @@ def run_combined_report():
             # Gunluk veri
             orders = fetch_orders(store, token, yesterday_start, yesterday_end)
             store_products = {}
+            order_total = 0.0
             for order in orders:
+                order_total += float(order.get("total_price", 0))
                 for item in order.get("line_items", []):
                     pname = item.get("title", "Bilinmeyen Urun")
                     qty = item.get("quantity", 0)
@@ -972,6 +974,12 @@ def run_combined_report():
                         store_products[pname]["total"] += price * qty
                     else:
                         store_products[pname] = {"qty": qty, "price": price, "total": price * qty}
+            # Siparis toplamini kullan (kargo+vergi dahil)
+            prod_sum = sum(p["total"] for p in store_products.values())
+            if prod_sum > 0 and order_total > 0:
+                ratio = order_total / prod_sum
+                for p in store_products.values():
+                    p["total"] = round(p["total"] * ratio, 2)
             for pname, pinfo in store_products.items():
                 daily_products.append({
                     "store": name, "product": pname,
@@ -982,7 +990,9 @@ def run_combined_report():
             logger.info(f"  → {name} aylik verisi cekiliyor...")
             m_orders = fetch_orders(store, token, month_start, month_end)
             m_store_products = {}
+            m_order_total = 0.0
             for order in m_orders:
+                m_order_total += float(order.get("total_price", 0))
                 for item in order.get("line_items", []):
                     pname = item.get("title", "Bilinmeyen Urun")
                     qty = item.get("quantity", 0)
@@ -992,6 +1002,12 @@ def run_combined_report():
                         m_store_products[pname]["total"] += price * qty
                     else:
                         m_store_products[pname] = {"qty": qty, "price": price, "total": price * qty}
+            # Siparis toplamini kullan (kargo+vergi dahil)
+            m_prod_sum = sum(p["total"] for p in m_store_products.values())
+            if m_prod_sum > 0 and m_order_total > 0:
+                m_ratio = m_order_total / m_prod_sum
+                for p in m_store_products.values():
+                    p["total"] = round(p["total"] * m_ratio, 2)
             for pname, pinfo in m_store_products.items():
                 monthly_products.append({
                     "store": name, "product": pname,
